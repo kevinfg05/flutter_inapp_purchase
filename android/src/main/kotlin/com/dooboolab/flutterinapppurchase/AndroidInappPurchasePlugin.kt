@@ -81,7 +81,7 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
             
             billingClient = BillingClient.newBuilder(context ?: return).apply {
                 setListener(purchasesUpdatedListener)
-                enablePendingPurchases()
+                enablePendingPurchases(PendingPurchasesParams.newBuilder().enableOneTimeProducts().build())
             }.build()
             
             billingClient?.startConnection(object : BillingClientStateListener {
@@ -365,15 +365,18 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
         safeChannel: MethodResultWrapper
     ) {
         val type = if(call.argument<String>("type") == "subs") BillingClient.ProductType.SUBS else BillingClient.ProductType.INAPP
-        val params = QueryPurchaseHistoryParams.newBuilder().apply { setProductType(type) }.build()
+        val params = QueryPurchasesParams.newBuilder()
+            .setProductType(type) // 或 SUBS
+            .build()
+//            QueryPurchaseHistoryParams.newBuilder().apply { setProductType(type) }.build()
 
-        billingClient!!.queryPurchaseHistoryAsync(
+        billingClient!!.queryPurchasesAsync(
             params,
-            PurchaseHistoryResponseListener { billingResult, purchaseHistoryRecordList ->
+            PurchasesResponseListener { billingResult, purchaseHistoryRecordList ->
                 if (billingResult.responseCode != BillingClient.BillingResponseCode.OK) {
                     val errorData = BillingError.getErrorFromResponseData(billingResult.responseCode)
                     safeChannel.error(call.method, errorData.code, errorData.message)
-                    return@PurchaseHistoryResponseListener
+                    return@PurchasesResponseListener
                 }
                 val items = JSONArray()
                 try {
@@ -388,7 +391,7 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
                         items.put(item)
                     }
                     safeChannel.success(items.toString())
-                    return@PurchaseHistoryResponseListener
+                    return@PurchasesResponseListener
                 } catch (je: JSONException) {
                     je.printStackTrace()
                     safeChannel.error(TAG, BillingError.E_BILLING_RESPONSE_JSON_PARSE_ERROR, je.message)
@@ -409,7 +412,7 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
 
         billingClient!!.queryProductDetailsAsync(
             QueryProductDetailsParams.newBuilder().setProductList(params).build()
-        ) { billingResult, products ->
+        ) { billingResult, detail ->
             // On error
             if (billingResult.responseCode != BillingClient.BillingResponseCode.OK) {
                 val errorData = BillingError.getErrorFromResponseData(billingResult.responseCode)
@@ -419,7 +422,7 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
 
             try {
                 val items = JSONArray()
-                for (productDetails in products) {
+                for (productDetails in detail.productDetailsList) {
                     // Add to list of tracked products
                     if (!productDetailsList.contains(productDetails)) {
                         productDetailsList.add(productDetails)
@@ -556,8 +559,8 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
 
             when (prorationMode) {
                 -1 -> {} //ignore
-                ProrationMode.IMMEDIATE_AND_CHARGE_PRORATED_PRICE -> {
-                    params.setReplaceProrationMode(ProrationMode.IMMEDIATE_AND_CHARGE_PRORATED_PRICE)
+                SubscriptionUpdateParams.ReplacementMode.CHARGE_PRORATED_PRICE -> {
+                    params.setSubscriptionReplacementMode(prorationMode)
                     if (type != BillingClient.ProductType.SUBS) {
                         safeChannel.error(
                             TAG,
@@ -567,12 +570,12 @@ class AndroidInappPurchasePlugin internal constructor() : MethodCallHandler,
                         return
                     }
                 }
-                ProrationMode.IMMEDIATE_WITHOUT_PRORATION,
-                ProrationMode.DEFERRED,
-                ProrationMode.IMMEDIATE_WITH_TIME_PRORATION,
-                ProrationMode.IMMEDIATE_AND_CHARGE_FULL_PRICE ->
-                    params.setReplaceProrationMode(prorationMode)
-                else -> params.setReplaceProrationMode(ProrationMode.UNKNOWN_SUBSCRIPTION_UPGRADE_DOWNGRADE_POLICY)
+                SubscriptionUpdateParams.ReplacementMode.WITHOUT_PRORATION,
+                SubscriptionUpdateParams.ReplacementMode.DEFERRED,
+                SubscriptionUpdateParams.ReplacementMode.WITH_TIME_PRORATION,
+                SubscriptionUpdateParams.ReplacementMode.CHARGE_FULL_PRICE ->
+                    params.setSubscriptionReplacementMode(prorationMode)
+                else -> params.setSubscriptionReplacementMode(SubscriptionUpdateParams.ReplacementMode.UNKNOWN_REPLACEMENT_MODE)
             }
 
             if (purchaseToken != null) {
